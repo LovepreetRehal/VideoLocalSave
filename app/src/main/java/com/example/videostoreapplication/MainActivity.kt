@@ -2,6 +2,7 @@ package com.example.videostoreapplication
 
 import android.app.DownloadManager
 import android.content.Context
+import android.content.Intent
 import android.database.Cursor
 import android.net.Uri
 import android.os.Bundle
@@ -19,6 +20,7 @@ import androidx.recyclerview.widget.LinearLayoutManager
 import androidx.recyclerview.widget.RecyclerView
 import com.app.casino.retrofit.BaseResponse
 import com.example.videostoreapplication.databinding.ActivityMainBinding
+import com.example.videostoreapplication.notification.DownloadForegroundService
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
@@ -91,7 +93,11 @@ class MainActivity : AppCompatActivity() {
                                             .forEach { video ->
                                                 video.item_name?.let { videoUrl ->
                                                     videoList.add(videoUrl)
-                                                    enqueueVideoDownload(this@MainActivity, videoUrl) // Download the video
+//                                                    enqueueVideoDownload(this@MainActivity, videoUrl) // Download the video
+                                                    val intent = Intent(this@MainActivity, DownloadForegroundService::class.java)
+                                                    intent.putExtra("videoUrl", videoUrl)
+                                                    startService(intent)
+
                                                 }
                                             }
                                     }
@@ -167,82 +173,6 @@ class MainActivity : AppCompatActivity() {
             }
         })
     }
-
-
-
-    private fun enqueueVideoDownload(context: Context, videoUrl: String) {
-        // Delete old videos if total size exceeds 1GB
-        manageVideoStorage(context)
-
-        val videoName = Uri.parse(videoUrl).lastPathSegment ?: "video.mp4"
-        val request = DownloadManager.Request(Uri.parse(videoUrl))
-            .setTitle("Downloading video")
-            .setDescription("Downloading $videoName")
-            .setDestinationInExternalFilesDir(context, Environment.DIRECTORY_DOWNLOADS, videoName)
-            .setNotificationVisibility(DownloadManager.Request.VISIBILITY_VISIBLE_NOTIFY_COMPLETED)
-
-        val downloadManager = context.getSystemService(Context.DOWNLOAD_SERVICE) as DownloadManager
-        val downloadId = downloadManager.enqueue(request)
-
-        // Track download status
-        trackDownloadStatus(context, downloadId, videoName)
-    }
-
-    private fun trackDownloadStatus(context: Context, downloadId: Long, videoName: String) {
-        lifecycleScope.launch(Dispatchers.IO) {
-            var downloading = true
-            val downloadManager = context.getSystemService(Context.DOWNLOAD_SERVICE) as DownloadManager
-            while (downloading) {
-                val query = DownloadManager.Query().setFilterById(downloadId)
-                val cursor: Cursor = downloadManager.query(query)
-
-                if (cursor.moveToFirst()) {
-                    val status = cursor.getInt(cursor.getColumnIndexOrThrow(DownloadManager.COLUMN_STATUS))
-                    if (status == DownloadManager.STATUS_SUCCESSFUL) {
-                        downloading = false
-                        val uriString = cursor.getString(cursor.getColumnIndexOrThrow(
-                            DownloadManager.COLUMN_LOCAL_URI))
-                        // Call the suspend function on the main thread
-                        withContext(Dispatchers.Main) {
-                            playVideoOffline(uriString)  // Play video after downloading
-                        }
-                    } else if (status == DownloadManager.STATUS_FAILED) {
-                        downloading = false
-                        lifecycleScope.launch(Dispatchers.Main) {
-                            Toast.makeText(context, "Download failed", Toast.LENGTH_SHORT).show()
-                        }
-                    }
-                }
-                cursor.close()
-            }
-        }
-    }
-
-    private fun manageVideoStorage(context: Context) {
-        val downloadsDir = context.getExternalFilesDir(Environment.DIRECTORY_DOWNLOADS)
-        val files = downloadsDir?.listFiles() ?: return
-
-        // Calculate the total size of downloaded videos
-        var totalSize = 0L
-        val videoFiles = files.filter { it.extension == "mp4" }
-        for (file in videoFiles) {
-            totalSize += file.length()
-        }
-
-        // Delete the oldest video until total size is less than 1GB
-        if (totalSize >= MAX_STORAGE_SIZE) {
-            videoFiles.sortedBy { it.lastModified() }.forEach { file ->
-                if (totalSize >= MAX_STORAGE_SIZE) {
-                    totalSize -= file.length()
-                    file.delete()
-                    Log.d(TAG, "Deleted old video: ${file.name}")
-                } else {
-                    return
-                }
-            }
-        }
-    }
-
 
 
     private suspend fun playVideoOffline(videoUri: String) {
